@@ -4,6 +4,10 @@ use std::path::Path;
 use std::process::exit;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
+use std::fs::Metadata;
+use std::os::unix::fs::MetadataExt;
+use users::{get_user_by_uid, get_group_by_gid};
+use chrono::{DateTime, Local};
 
 
 fn main() {
@@ -47,19 +51,10 @@ fn main() {
                     }
                 },
                 "ls" => {
-                    let mut show_hidden = false;
-                    let mut long_format = false;
-                    let mut classify = false;
-
-                    for arg in args {
-                        if arg.starts_with("-") {
-                            show_hidden |= arg.contains("a");
-                            long_format |= arg.contains("l");
-                            classify |= arg.contains("F");
-                        }
-                    }
-
-                    list_directory(".", show_hidden, long_format, classify);
+                    let long_format = args.contains(&"-l");
+                    let all = args.contains(&"-a");
+                    let classify = args.contains(&"-F");
+                    list_directory(Path::new("."), long_format, all, classify);
                 },
                 "rm" => {
                     let mut recursive = false;
@@ -128,49 +123,64 @@ fn main() {
     }
 }
 
-fn list_directory(path: &str, show_hidden: bool, long_format: bool, classify: bool) {
-    let entries = match fs::read_dir(path) {
+fn list_directory_entry(path: &Path, metadata: &Metadata, classify: bool) -> String {
+    let file_type = metadata.file_type();
+    let permissions = metadata.permissions();
+
+    let file_type_indicator = if file_type.is_dir() { "d" } else { "-" };
+    let permissions_str = format!("{:o}", permissions.mode() & 0o777);
+
+    let num_links = metadata.nlink();
+    let owner = get_user_by_uid(metadata.uid()).map(|u| u.name().to_string_lossy().into_owned()).unwrap_or_else(|| metadata.uid().to_string());
+    let group = get_group_by_gid(metadata.gid()).map(|g| g.name().to_string_lossy().into_owned()).unwrap_or_else(|| metadata.gid().to_string());
+    let size = metadata.len();
+    
+    let datetime: DateTime<Local> = metadata.modified().unwrap_or_else(|_| std::time::SystemTime::now()).into();
+    let datetime_str = datetime.format("%b %d %H:%M").to_string();
+
+    let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+    let classify_char = if classify {
+        if file_type.is_dir() { "/" } else if file_type.is_symlink() { "@" } else if permissions.mode() & 0o111 != 0 { "*" } else { "" }
+    } else { "" };
+
+    format!("{}{} {} {} {} {} {} {}", file_type_indicator, permissions_str, num_links, owner, group, size, datetime_str, name + classify_char)
+}
+
+fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
+    let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
-            eprintln!("ls: cannot access '{}': {}", path, e);
+            eprintln!("ls: cannot access '{}': {}", dir.display(), e);
             return;
         }
     };
 
     for entry in entries {
         if let Ok(entry) = entry {
-            let file_name = entry.file_name().to_string_lossy().into_owned();
-
-            // Skip hidden files unless -a is specified
-            if !show_hidden && file_name.starts_with('.') {
+            let path = entry.path();
+            if !all && path.file_name().unwrap_or_default().to_string_lossy().starts_with('.') {
                 continue;
             }
 
-            if long_format {
-                // Implement long format listing details (like permissions, owner, size)
-                // This is a placeholder for actual implementation
-                print!("drwxr-xr-x 1 user group 4096 Jan 1 00:00 ");
-            }
-
-            print!("{}", file_name);
-
-            if classify {
-                // Add a character indicating the file type
-                let metadata = if let Ok(metadata) = entry.metadata() {
-                    metadata
-                } else {
+            let metadata = match path.metadata() {
+                Ok(metadata) => metadata,
+                Err(e) => {
+                    eprintln!("ls: cannot access '{}': {}", path.display(), e);
                     continue;
-                };
-
-                if metadata.is_dir() {
-                    print!("/");
-                } else if metadata.permissions().mode() & 0o111 != 0 {
-                    print!("*");
                 }
-                // Add more file types (like symbolic links) as needed
-            }
+            };
 
-            println!();
+            let display_str = if long_format {
+                list_directory_entry(&path, &metadata, classify)
+            } else {
+                let name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let classify_char = if classify {
+                    if metadata.file_type().is_dir() { "/" } else if metadata.file_type().is_symlink() { "@" } else if metadata.permissions().mode() & 0o111 != 0 { "*" } else { "" }
+                } else { "" };
+                format!("{}{}", name, classify_char)
+            };
+
+            println!("{}", display_str);
         }
     }
 }
