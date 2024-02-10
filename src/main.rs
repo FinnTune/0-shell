@@ -17,7 +17,7 @@ fn main() {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        if let Ok(_) = io::stdin().read_line(&mut input) {
+        if io::stdin().read_line(&mut input).is_ok() {
             let input = input.trim();
             let mut parts = input.split_whitespace();
             let command = parts.next().unwrap_or("");
@@ -27,7 +27,7 @@ fn main() {
                 "cd" => {
                     let new_dir = args.first().map_or("/", |x| *x);
                     let root = Path::new(new_dir);
-                    if let Err(e) = env::set_current_dir(&root) {
+                    if let Err(e) = env::set_current_dir(root) {
                         eprintln!("{}", e);
                     }
                 }
@@ -109,7 +109,7 @@ fn main() {
                     } else {
                         for dir_name in args {
                             let path = Path::new(dir_name);
-                            match fs::create_dir(&path) {
+                            match fs::create_dir(path) {
                                 Ok(_) => {}
                                 Err(e) => eprintln!("mkdir: {}: {}", dir_name, e),
                             }
@@ -232,40 +232,42 @@ fn print_metadata(path: &Path, long_format: bool) {
     }
 }
 
-fn get_file_blocks(path: &Path) -> Option<i64> {
+fn get_file_blocks(path: &Path) -> Option<f64> {
     let path_cstr = match path.to_str() {
         Some(path_str) => CString::new(path_str).expect("CString::new failed"),
         None => return None,
     };
 
     let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let result = unsafe { libc::stat(path_cstr.as_ptr(), &mut stat) };
-
-    if result == 0 {
-        Some(stat.st_blocks)
+    if unsafe { libc::stat(path_cstr.as_ptr(), &mut stat) } == 0 {
+        let blocks = (stat.st_blocks as f64 + 1.0).floor() / 2.0; // Convert to 1024-byte blocks
+        println!("Path {:?}, Blocks: {}", path_cstr, blocks);        
+        Some(blocks)
     } else {
         None
     }
 }
 
 fn calculate_total_blocks(dir: &Path) -> i64 {
-    let mut total_blocks = 0;
+    let mut total_blocks = 0.0;
 
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
-            if let Some(blocks) = get_file_blocks(&entry.path()) {
-                // Add the blocks; each st_blocks unit is 512 bytes.
-                total_blocks += blocks;
+            if entry.metadata().is_ok() {
+                if let Some(blocks) = get_file_blocks(&entry.path()) {
+                    println!("Blocks for {:?}: {}", entry.path(), blocks);
+                    total_blocks += blocks;
+                }
             }
         }
     }
 
-    // Since `ls` displays the total in 1024-byte blocks, adjust the total_blocks from 512-byte units to 1024-byte units.
-    // This step is crucial for aligning with the `ls` command's output.
-    // Note: This assumes that `ls` calculates the total based on the actual disk usage, which may include filesystem overhead.
-    let total_in_1024_byte_blocks = total_blocks / 2; // Convert from 512-byte blocks to 1024-byte blocks
+    // Optionally, add the block size of the directory itself
+    if let Some(blocks) = get_file_blocks(dir) {
+        total_blocks += blocks;
+    }
 
-    total_in_1024_byte_blocks
+    total_blocks.ceil() as i64
 }
 
 fn remove_item(path: &Path, recursive: bool) -> Result<(), String> {
@@ -299,7 +301,7 @@ fn copy_file(source: &Path, destination: &Path) -> Result<(), String> {
         destination.to_path_buf()
     };
 
-    fs::copy(source, &destination)
+    fs::copy(source, destination)
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -315,7 +317,7 @@ fn move_item(source: &Path, destination: &Path) -> Result<(), String> {
         destination.to_path_buf()
     };
 
-    fs::rename(source, &destination).map_err(|e| e.to_string())
+    fs::rename(source, destination).map_err(|e| e.to_string())
 }
 
 fn format_permissions(mode: u32) -> String {
