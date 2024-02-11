@@ -203,13 +203,21 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, _classify: bool) {
         }
     });
 
-    if long_format {
-        let total_blocks = calculate_total_blocks(dir);
+    if long_format && all {
+        let total_blocks = calculate_total_blocks(dir, all);
         println!("total {}", total_blocks);
 
         // Manually print '.' and '..' with their metadata
         print_metadata(dir, true); // Current directory '.'
         print_metadata(&dir.join(".."), true); // Parent directory '..'
+    } else if long_format && !all {
+        let total_blocks = calculate_total_blocks(dir, all);
+        println!("total {}", total_blocks);
+    }
+
+    if all && !long_format {
+        print!(".  ");
+        print!("..  ");
     }
 
     // Print remaining entries
@@ -243,7 +251,7 @@ fn print_metadata(path: &Path, long_format: bool) {
     }
 }
 
-fn calculate_total_blocks(dir: &Path) -> u64 {
+fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
     let mut total_blocks = 0.0;
 
     // Assuming physical_block_size and ls_block_size are constants for all files in this context
@@ -254,6 +262,15 @@ fn calculate_total_blocks(dir: &Path) -> u64 {
         fs::read_dir(dir).unwrap_or_else(|_| panic!("Failed to read directory: {:?}", dir));
 
     for entry in entries.flatten() {
+        // Convert the filename part of the path to a string slice if possible
+        if let Some(filename) = entry.path().file_name().and_then(|n| n.to_str()) {
+            // Check if the filename starts with a dot, excluding such files
+            if filename.starts_with('.') && !all {
+                // println!("Skipping hidden file: {:?}", entry.path());
+                continue;
+            }
+        }
+
         let metadata = entry
             .metadata()
             .unwrap_or_else(|_| panic!("Failed to get metadata for entry: {:?}", entry.path()));
@@ -266,8 +283,9 @@ fn calculate_total_blocks(dir: &Path) -> u64 {
     // Accurately calculate blocks for "." and ".."
     let dot_blocks = calculate_dir_blocks(dir, physical_block_size, ls_block_size);
     let dotdot_blocks = calculate_dir_blocks(&dir.join(".."), physical_block_size, ls_block_size);
-
-    total_blocks += dot_blocks + dotdot_blocks;
+    if all {
+        total_blocks += dot_blocks + dotdot_blocks;
+    }
 
     // Perform ceiling operation on the total blocks to round up to the nearest integer
     total_blocks.ceil() as u64
