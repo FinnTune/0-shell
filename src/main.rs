@@ -9,9 +9,12 @@ use std::path::Path;
 use std::process::exit;
 use users::{get_group_by_gid, get_user_by_uid};
 extern crate libc;
-use std::ffi::CString;
+// use std::ffi::CString;
+// use libc::stat;
 
 fn main() {
+    // let file_path = "./testfile.txt"; // Update this to your test file path
+    // print_file_blocks(file_path);
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
@@ -210,7 +213,8 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, _classify: bool) {
     }
 
     // Print remaining entries
-    for entry in entries {
+    for entry in &entries {
+        let length = entries.len();
         let path = entry.path();
         let metadata = entry.metadata().unwrap(); // Handle errors appropriately
         let display_str = if long_format {
@@ -221,7 +225,14 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, _classify: bool) {
                 .to_string_lossy()
                 .to_string()
         };
-        println!("{}", display_str);
+        if !long_format {
+            print!("{}  ", display_str);
+            if entry.path() == entries[length - 1].path() {
+                println!()
+            }
+        } else {
+            println!("{}", display_str);
+        }
     }
 }
 
@@ -232,42 +243,43 @@ fn print_metadata(path: &Path, long_format: bool) {
     }
 }
 
-fn get_file_blocks(path: &Path) -> Option<f64> {
-    let path_cstr = match path.to_str() {
-        Some(path_str) => CString::new(path_str).expect("CString::new failed"),
-        None => return None,
-    };
-
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::stat(path_cstr.as_ptr(), &mut stat) } == 0 {
-        let blocks = (stat.st_blocks as f64 + 1.0).floor() / 2.0; // Convert to 1024-byte blocks
-        println!("Path {:?}, Blocks: {}", path_cstr, blocks);        
-        Some(blocks)
-    } else {
-        None
-    }
-}
-
-fn calculate_total_blocks(dir: &Path) -> i64 {
+fn calculate_total_blocks(dir: &Path) -> u64 {
     let mut total_blocks = 0.0;
 
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            if entry.metadata().is_ok() {
-                if let Some(blocks) = get_file_blocks(&entry.path()) {
-                    println!("Blocks for {:?}: {}", entry.path(), blocks);
-                    total_blocks += blocks;
-                }
-            }
-        }
+    // Assuming physical_block_size and ls_block_size are constants for all files in this context
+    let physical_block_size = 4096.0; // Common filesystem block size in bytes
+    let ls_block_size = 1024.0; // Block size used by `ls` in bytes
+
+    let entries =
+        fs::read_dir(dir).unwrap_or_else(|_| panic!("Failed to read directory: {:?}", dir));
+
+    for entry in entries.flatten() {
+        let metadata = entry
+            .metadata()
+            .unwrap_or_else(|_| panic!("Failed to get metadata for entry: {:?}", entry.path()));
+        let file_physical_blocks_in_use = metadata.blocks() as f64; // st_blocks reports 512-byte blocks
+        let blocks_used = (file_physical_blocks_in_use * 512.0 / physical_block_size)
+            * (physical_block_size / ls_block_size);
+        total_blocks += blocks_used;
     }
 
-    // Optionally, add the block size of the directory itself
-    if let Some(blocks) = get_file_blocks(dir) {
-        total_blocks += blocks;
-    }
+    // Accurately calculate blocks for "." and ".."
+    let dot_blocks = calculate_dir_blocks(dir, physical_block_size, ls_block_size);
+    let dotdot_blocks = calculate_dir_blocks(&dir.join(".."), physical_block_size, ls_block_size);
 
-    total_blocks.ceil() as i64
+    total_blocks += dot_blocks + dotdot_blocks;
+
+    // Perform ceiling operation on the total blocks to round up to the nearest integer
+    total_blocks.ceil() as u64
+}
+
+fn calculate_dir_blocks(dir: &Path, physical_block_size: f64, ls_block_size: f64) -> f64 {
+    fs::metadata(dir)
+        .map(|metadata| {
+            let blocks_in_use = metadata.blocks() as f64; // st_blocks reports 512-byte blocks
+            (blocks_in_use * 512.0 / physical_block_size) * (physical_block_size / ls_block_size)
+        })
+        .unwrap_or(0.0)
 }
 
 fn remove_item(path: &Path, recursive: bool) -> Result<(), String> {
@@ -337,3 +349,68 @@ fn format_permissions(mode: u32) -> String {
 
     perms
 }
+
+//Old code for reference
+
+// fn print_file_blocks(file_path: &str) {
+//     let path_cstr = CString::new(file_path).expect("CString::new failed");
+//     let mut statbuf: stat = unsafe { std::mem::zeroed() };
+
+//     if unsafe { libc::stat(path_cstr.as_ptr(), &mut statbuf) } == 0 {
+//         println!("{}: {} 512-byte blocks allocated", file_path, statbuf.st_blocks);
+//     } else {
+//         eprintln!("Failed to stat file {}", file_path);
+//     }
+// }
+
+// fn print_file_size(file_path: &Path) -> f64{
+//     match fs::metadata(file_path) {
+//         Ok(metadata) => {
+//             let size = metadata.len() as f64; // Get the file size in bytes
+//             println!("Size of {:?}: {} bytes", file_path, size);
+//             return size
+//         },
+//         Err(e) => {
+//             eprintln!("Failed to get metadata for {:?}: {}", file_path, e);
+//             return 0.0
+//         },
+//     }
+// }
+
+// fn get_file_blocks(path: &Path) -> Option<f64> {
+//     // Print file size and store it
+//     let file_size = print_file_size(path);
+
+//     // Calculate the number of 512-byte blocks. Since Rust's division is integer division when both operands are integers,
+//     // casting to f64 ensures we get a decimal result. Ceiling the result to account for any partial block usage.
+//     let blocks = (file_size / 512.0).ceil();
+//     println!("Path: {:?}, Blocks: {}", path, blocks);
+
+//     // Return the number of blocks, wrapped in Some() to match the Option<f64> return type
+//     Some(blocks)
+// }
+
+// fn calculate_total_blocks(dir: &Path) -> f64 {
+//     let mut total_blocks = 0.0;
+
+//     if let Ok(entries) = fs::read_dir(dir) {
+//         for entry in entries.flatten() {
+//             if entry.metadata().is_ok() {
+//                 if let Some(blocks) = get_file_blocks(&entry.path()) {
+//                     if blocks < 1.0 {
+//                         println!("Added 1");
+//                         total_blocks += 1.0;
+//                     }
+//                     total_blocks += blocks;
+//                 }
+//             }
+//         }
+//     }
+
+//     // Optionally, add the block size of the directory itself
+//     if let Some(blocks) = get_file_blocks(dir) {
+//         total_blocks += blocks * 2.0;
+//     }
+
+//     total_blocks
+// }
