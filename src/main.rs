@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::exit;
 use users::{get_group_by_gid, get_user_by_uid};
 extern crate libc;
+use std::os::unix::fs::PermissionsExt;
 // use std::ffi::CString;
 // use libc::stat;
 
@@ -144,7 +145,13 @@ fn parse_flags(args: &[&str]) -> Vec<String> {
     parsed_flags
 }
 
-fn list_directory_entry(path: &Path, metadata: &Metadata) -> String {
+fn list_directory_entry(
+    path: &Path,
+    metadata: &Metadata,
+    classify: bool,
+    all: bool,
+    long_format: bool,
+) -> String {
     let file_type_indicator = format_permissions(metadata.mode());
     let num_links = metadata.nlink();
     let owner = get_user_by_uid(metadata.uid())
@@ -173,14 +180,69 @@ fn list_directory_entry(path: &Path, metadata: &Metadata) -> String {
             .to_string()
     };
 
-    format!(
-        "{} {:>3} {} {} {:>6} {} {}",
-        file_type_indicator, num_links, owner, group, size, datetime_str, name
-    )
+    let classification_char = if classify {
+        get_file_classification_char(metadata)
+    } else {
+        "".to_string()
+    };
+
+    if classify && !all && !long_format {
+        format!("{}{}", name, classification_char)
+    } else if all && classify && !long_format {
+        format!("{}{}", name, classification_char)
+    } else if all && !classify && !long_format {
+        format!("{}", name)
+    } else if long_format && all && !classify {
+        format!(
+            "{} {:>3} {} {} {:>6} {} {}",
+            file_type_indicator, num_links, owner, group, size, datetime_str, name
+        )
+    } else if !classify && !all && !long_format {
+        format!("{}", name)
+    } else if classify && all && long_format {
+        // Append the classification_char to the formatted string
+        format!(
+            "{} {:>3} {} {} {:>6} {} {}{}",
+            file_type_indicator,
+            num_links,
+            owner,
+            group,
+            size,
+            datetime_str,
+            name,
+            classification_char
+        )
+    } else {
+        format!(
+            "{} {:>3} {} {} {:>6} {} {}",
+            file_type_indicator,
+            num_links,
+            owner,
+            group,
+            size,
+            datetime_str,
+            name,
+        )
+    }
 }
+
+fn get_file_classification_char(metadata: &Metadata) -> String {
+    if metadata.is_dir() {
+        "/".to_string()
+    } else if metadata.permissions().mode() & 0o111 != 0 {
+        "*".to_string()
+    } else {
+        "".to_string()
+    }
+}
+
 // When printing the total, consider how you want to represent this total in terms of your filesystem's block size.
 // The division or adjustment might be needed if you're converting between block sizes or aligning with how `ls` reports its total.
-fn list_directory(dir: &Path, long_format: bool, all: bool, _classify: bool) {
+fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
+    // println!(
+    //     "LongFormat {}, All {}, Classify {}",
+    //     long_format, all, classify
+    // );
     let mut entries: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .filter_map(|entry| entry.ok())
@@ -208,34 +270,45 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, _classify: bool) {
         println!("total {}", total_blocks);
 
         // Manually print '.' and '..' with their metadata
-        print_metadata(dir, true); // Current directory '.'
-        print_metadata(&dir.join(".."), true); // Parent directory '..'
+        print_metadata(dir, true, classify, all); // Current directory '.'
+        print_metadata(&dir.join(".."), true, classify, all); // Parent directory '..'
     } else if long_format && !all {
         let total_blocks = calculate_total_blocks(dir, all);
         println!("total {}", total_blocks);
     }
 
-    if all && !long_format {
+    if all && !long_format && !classify {
         print!(".  ");
         print!("..  ");
     }
 
+    if all && !long_format && classify {
+        print!("./  ");
+        print!("../  ");
+    }
+
     // Print remaining entries
     for entry in &entries {
+        // println!("Entries: {:?}", entries);
         let length = entries.len();
         let path = entry.path();
         let metadata = entry.metadata().unwrap(); // Handle errors appropriately
-        let display_str = if long_format {
-            list_directory_entry(&path, &metadata)
-        } else {
-            path.file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string()
-        };
+        let display_str = list_directory_entry(&path, &metadata, classify, all, long_format);
+        // let display_str = if long_format {
+        //     list_directory_entry(&path, &metadata, classify, all)
+        // } else {
+        //     path.file_name()
+        //         .unwrap_or_default()
+        //         .to_string_lossy()
+        //         .to_string()
+        // };
         if !long_format {
-            print!("{}  ", display_str);
-            if entry.path() == entries[length - 1].path() {
+            // println!("EntryPath {}, Last EntryPath {}", entry.path().display(), entries[length - 1].path().display());
+            // println!("DisplayStr {}, Last DisplayStr {}", display_str, entries[length - 1].path().display());
+            if entry.path() != entries[length - 1].path() {
+                print!("{}  ", display_str);
+            } else {
+                print!("{}  ", display_str);
                 println!()
             }
         } else {
@@ -244,10 +317,13 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, _classify: bool) {
     }
 }
 
-fn print_metadata(path: &Path, long_format: bool) {
+fn print_metadata(path: &Path, long_format: bool, classify: bool, all: bool) {
     if long_format {
         let metadata = fs::metadata(path).unwrap(); // Handle errors appropriately
-        println!("{}", list_directory_entry(path, &metadata));
+        println!(
+            "{}",
+            list_directory_entry(path, &metadata, classify, all, long_format)
+        );
     }
 }
 
