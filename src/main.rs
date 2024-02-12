@@ -7,15 +7,44 @@ use std::io::{self, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::exit;
-use users::{get_group_by_gid, get_user_by_uid};
 extern crate libc;
+use libc::{getgrgid_r, getpwuid_r, group, passwd};
+use std::ffi::CStr;
+use std::mem;
+use std::ptr;
 use std::os::unix::fs::PermissionsExt;
-// use std::ffi::CString;
-// use libc::stat;
+use libc::mode_t;
+
+
+// Function to get username by UID
+fn get_user_name_by_uid(uid: u32) -> Option<String> {
+    let mut pwd = unsafe { mem::zeroed() };
+    let mut buf = vec![0u8; 1024];
+    let mut result = ptr::null_mut();
+    unsafe {
+        if getpwuid_r(uid, &mut pwd, buf.as_mut_ptr() as *mut _, buf.len(), &mut result) == 0
+            && !result.is_null() {
+            return Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+// Function to get group name by GID
+fn get_group_name_by_gid(gid: u32) -> Option<String> {
+    let mut grp = unsafe { mem::zeroed() };
+    let mut buf = vec![0u8; 1024];
+    let mut result = ptr::null_mut();
+    unsafe {
+        if getgrgid_r(gid, &mut grp, buf.as_mut_ptr() as *mut _, buf.len(), &mut result) == 0
+            && !result.is_null() {
+            return Some(CStr::from_ptr(grp.gr_name).to_string_lossy().into_owned());
+        }
+    }
+    None
+}
 
 fn main() {
-    // let file_path = "./testfile.txt"; // Update this to your test file path
-    // print_file_blocks(file_path);
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
@@ -152,14 +181,10 @@ fn list_directory_entry(
     all: bool,
     long_format: bool,
 ) -> String {
-    let file_type_indicator = format_permissions(metadata.mode());
+    let file_type_indicator = format_permissions(metadata.mode() as mode_t);
     let num_links = metadata.nlink();
-    let owner = get_user_by_uid(metadata.uid())
-        .map(|u| u.name().to_string_lossy().into_owned())
-        .unwrap_or_else(|| metadata.uid().to_string());
-    let group = get_group_by_gid(metadata.gid())
-        .map(|g| g.name().to_string_lossy().into_owned())
-        .unwrap_or_else(|| metadata.gid().to_string());
+    let owner = get_user_name_by_uid(metadata.uid()).unwrap_or_else(|| metadata.uid().to_string());
+    let group = get_group_name_by_gid(metadata.gid()).unwrap_or_else(|| metadata.gid().to_string());
     let size = metadata.len();
 
     // Use `timestamp_opt` instead of `timestamp` and handle the result appropriately
@@ -239,10 +264,6 @@ fn get_file_classification_char(metadata: &Metadata) -> String {
 // When printing the total, consider how you want to represent this total in terms of your filesystem's block size.
 // The division or adjustment might be needed if you're converting between block sizes or aligning with how `ls` reports its total.
 fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
-    // println!(
-    //     "LongFormat {}, All {}, Classify {}",
-    //     long_format, all, classify
-    // );
     let mut entries: Vec<_> = fs::read_dir(dir)
         .unwrap()
         .filter_map(|entry| entry.ok())
@@ -294,20 +315,12 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
         let path = entry.path();
         let metadata = entry.metadata().unwrap(); // Handle errors appropriately
         let display_str = list_directory_entry(&path, &metadata, classify, all, long_format);
-        // let display_str = if long_format {
-        //     list_directory_entry(&path, &metadata, classify, all)
-        // } else {
-        //     path.file_name()
-        //         .unwrap_or_default()
-        //         .to_string_lossy()
-        //         .to_string()
-        // };
+
         if length == 0 {
             println!();
         } else
         if !long_format {
-            // println!("EntryPath {}, Last EntryPath {}", entry.path().display(), entries[length - 1].path().display());
-            // println!("DisplayStr {}, Last DisplayStr {}", display_str, entries[length - 1].path().display());
+
             if entry.path() != entries[length - 1].path() {
                 print!("{}  ", display_str);
             } else {
@@ -429,85 +442,27 @@ fn move_item(source: &Path, destination: &Path) -> Result<(), String> {
     fs::rename(source, destination).map_err(|e| e.to_string())
 }
 
-fn format_permissions(mode: u32) -> String {
+fn format_permissions(mode: mode_t) -> String {
     let mut perms = String::with_capacity(10);
-    let types = ["---", "--x", "-w-", "-wx", "r--", "r-x", "rw-", "rwx"];
 
-    perms.push(if mode & 0o40000 == 0o40000 {
-        'd'
-    } else if mode & 0o100000 == 0o100000 {
-        '-'
-    } else {
-        '?'
+    // Determine file type
+    perms.push(match mode & libc::S_IFMT {
+        libc::S_IFDIR => 'd',
+        libc::S_IFCHR => 'c',
+        libc::S_IFBLK => 'b',
+        libc::S_IFREG => '-',
+        libc::S_IFLNK => 'l',
+        libc::S_IFSOCK => 's',
+        libc::S_IFIFO => 'p',
+        _ => '?',
     });
-    perms.push_str(types[((mode >> 6) & 7) as usize]);
-    perms.push_str(types[((mode >> 3) & 7) as usize]);
-    perms.push_str(types[(mode & 7) as usize]);
+
+    // Determine permissions (owner, group, others)
+    let types = ["---", "--x", "-w-", "-wx", "r--", "r-x", "rw-", "rwx"];
+    perms.push_str(types[((mode >> 6) & 7) as usize]); // Owner
+    perms.push_str(types[((mode >> 3) & 7) as usize]); // Group
+    perms.push_str(types[(mode & 7) as usize]);        // Others
 
     perms
 }
 
-//Old code for reference
-
-// fn print_file_blocks(file_path: &str) {
-//     let path_cstr = CString::new(file_path).expect("CString::new failed");
-//     let mut statbuf: stat = unsafe { std::mem::zeroed() };
-
-//     if unsafe { libc::stat(path_cstr.as_ptr(), &mut statbuf) } == 0 {
-//         println!("{}: {} 512-byte blocks allocated", file_path, statbuf.st_blocks);
-//     } else {
-//         eprintln!("Failed to stat file {}", file_path);
-//     }
-// }
-
-// fn print_file_size(file_path: &Path) -> f64{
-//     match fs::metadata(file_path) {
-//         Ok(metadata) => {
-//             let size = metadata.len() as f64; // Get the file size in bytes
-//             println!("Size of {:?}: {} bytes", file_path, size);
-//             return size
-//         },
-//         Err(e) => {
-//             eprintln!("Failed to get metadata for {:?}: {}", file_path, e);
-//             return 0.0
-//         },
-//     }
-// }
-
-// fn get_file_blocks(path: &Path) -> Option<f64> {
-//     // Print file size and store it
-//     let file_size = print_file_size(path);
-
-//     // Calculate the number of 512-byte blocks. Since Rust's division is integer division when both operands are integers,
-//     // casting to f64 ensures we get a decimal result. Ceiling the result to account for any partial block usage.
-//     let blocks = (file_size / 512.0).ceil();
-//     println!("Path: {:?}, Blocks: {}", path, blocks);
-
-//     // Return the number of blocks, wrapped in Some() to match the Option<f64> return type
-//     Some(blocks)
-// }
-
-// fn calculate_total_blocks(dir: &Path) -> f64 {
-//     let mut total_blocks = 0.0;
-
-//     if let Ok(entries) = fs::read_dir(dir) {
-//         for entry in entries.flatten() {
-//             if entry.metadata().is_ok() {
-//                 if let Some(blocks) = get_file_blocks(&entry.path()) {
-//                     if blocks < 1.0 {
-//                         println!("Added 1");
-//                         total_blocks += 1.0;
-//                     }
-//                     total_blocks += blocks;
-//                 }
-//             }
-//         }
-//     }
-
-//     // Optionally, add the block size of the directory itself
-//     if let Some(blocks) = get_file_blocks(dir) {
-//         total_blocks += blocks * 2.0;
-//     }
-
-//     total_blocks
-// }
