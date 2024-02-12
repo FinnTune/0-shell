@@ -302,6 +302,9 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
         //         .to_string_lossy()
         //         .to_string()
         // };
+        if length == 0 {
+            println!();
+        } else
         if !long_format {
             // println!("EntryPath {}, Last EntryPath {}", entry.path().display(), entries[length - 1].path().display());
             // println!("DisplayStr {}, Last DisplayStr {}", display_str, entries[length - 1].path().display());
