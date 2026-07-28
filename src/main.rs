@@ -97,7 +97,41 @@ fn main() {
                     let long_format = parsed_args.contains(&"-l".to_string());
                     let all = parsed_args.contains(&"-a".to_string());
                     let classify = parsed_args.contains(&"-F".to_string());
-                    list_directory(Path::new("."), long_format, all, classify);
+                    let paths: Vec<&String> =
+                        parsed_args.iter().filter(|a| !a.starts_with('-')).collect();
+
+                    if paths.is_empty() {
+                        list_directory(Path::new("."), long_format, all, classify);
+                    } else {
+                        let show_headers = paths.len() > 1;
+                        for (i, p) in paths.iter().enumerate() {
+                            let path = Path::new(p.as_str());
+                            match fs::metadata(path) {
+                                Ok(metadata) if metadata.is_dir() => {
+                                    if show_headers {
+                                        if i > 0 {
+                                            println!();
+                                        }
+                                        println!("{}:", p);
+                                    }
+                                    list_directory(path, long_format, all, classify);
+                                }
+                                Ok(metadata) => {
+                                    println!(
+                                        "{}",
+                                        list_directory_entry(
+                                            path,
+                                            &metadata,
+                                            classify,
+                                            all,
+                                            long_format
+                                        )
+                                    );
+                                }
+                                Err(e) => eprintln!("ls: cannot access '{}': {}", p, e),
+                            }
+                        }
+                    }
                 }
                 "rm" => {
                     let mut recursive = false;
