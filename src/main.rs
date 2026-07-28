@@ -1,5 +1,5 @@
 use chrono::TimeZone;
-use chrono::{DateTime, Local};
+use chrono::Local;
 use std::env;
 use std::fs;
 use std::fs::Metadata;
@@ -188,11 +188,10 @@ fn list_directory_entry(
     let size = metadata.len();
 
     // Use `timestamp_opt` instead of `timestamp` and handle the result appropriately
-    let datetime: DateTime<Local> = match Local.timestamp_opt(metadata.mtime(), 0) {
-        chrono::LocalResult::Single(dt) => dt,
-        _ => panic!("Invalid timestamp"),
+    let datetime_str = match Local.timestamp_opt(metadata.mtime(), 0) {
+        chrono::LocalResult::Single(dt) => dt.format("%b %e %H:%M").to_string(),
+        _ => "??? ?? ??:??".to_string(),
     };
-    let datetime_str = datetime.format("%b %e %H:%M").to_string();
 
     let name = if path.ends_with(".") {
         ".".to_string()
@@ -264,8 +263,15 @@ fn get_file_classification_char(metadata: &Metadata) -> String {
 // When printing the total, consider how you want to represent this total in terms of your filesystem's block size.
 // The division or adjustment might be needed if you're converting between block sizes or aligning with how `ls` reports its total.
 fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
-    let mut entries: Vec<_> = fs::read_dir(dir)
-        .unwrap()
+    let read_dir = match fs::read_dir(dir) {
+        Ok(read_dir) => read_dir,
+        Err(e) => {
+            eprintln!("ls: cannot access '{}': {}", dir.display(), e);
+            return;
+        }
+    };
+
+    let mut entries: Vec<_> = read_dir
         .filter_map(|entry| entry.ok())
         .filter(|entry| {
             all || !entry
@@ -313,7 +319,13 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
         // println!("Entries: {:?}", entries);
         let length = entries.len();
         let path = entry.path();
-        let metadata = entry.metadata().unwrap(); // Handle errors appropriately
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                eprintln!("ls: cannot access '{}': {}", path.display(), e);
+                continue;
+            }
+        };
         let display_str = list_directory_entry(&path, &metadata, classify, all, long_format);
 
         if length == 0 {
@@ -335,7 +347,13 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
 
 fn print_metadata(path: &Path, long_format: bool, classify: bool, all: bool) {
     if long_format {
-        let metadata = fs::metadata(path).unwrap(); // Handle errors appropriately
+        let metadata = match fs::metadata(path) {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                eprintln!("ls: cannot access '{}': {}", path.display(), e);
+                return;
+            }
+        };
         println!(
             "{}",
             list_directory_entry(path, &metadata, classify, all, long_format)
@@ -350,8 +368,13 @@ fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
     let physical_block_size = 4096.0; // Common filesystem block size in bytes
     let ls_block_size = 1024.0; // Block size used by `ls` in bytes
 
-    let entries =
-        fs::read_dir(dir).unwrap_or_else(|_| panic!("Failed to read directory: {:?}", dir));
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(e) => {
+            eprintln!("ls: cannot access '{}': {}", dir.display(), e);
+            return 0;
+        }
+    };
 
     for entry in entries.flatten() {
         // Convert the filename part of the path to a string slice if possible
@@ -363,9 +386,13 @@ fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
             }
         }
 
-        let metadata = entry
-            .metadata()
-            .unwrap_or_else(|_| panic!("Failed to get metadata for entry: {:?}", entry.path()));
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(e) => {
+                eprintln!("ls: cannot access '{}': {}", entry.path().display(), e);
+                continue;
+            }
+        };
         let file_physical_blocks_in_use = metadata.blocks() as f64; // st_blocks reports 512-byte blocks
         let blocks_used = (file_physical_blocks_in_use * 512.0 / physical_block_size)
             * (physical_block_size / ls_block_size);
