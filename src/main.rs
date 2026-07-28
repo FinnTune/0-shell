@@ -58,10 +58,18 @@ fn main() {
 
             match command {
                 "cd" => {
-                    let new_dir = args.first().map_or("/", |x| *x);
-                    let root = Path::new(new_dir);
-                    if let Err(e) = env::set_current_dir(root) {
-                        eprintln!("{}", e);
+                    let new_dir = match args.first() {
+                        Some(dir) => dir.to_string(),
+                        None => match env::var("HOME") {
+                            Ok(home) => home,
+                            Err(_) => {
+                                eprintln!("cd: HOME not set");
+                                continue;
+                            }
+                        },
+                    };
+                    if let Err(e) = env::set_current_dir(Path::new(&new_dir)) {
+                        eprintln!("cd: {}: {}", new_dir, e);
                     }
                 }
                 "exit" => exit(0),
