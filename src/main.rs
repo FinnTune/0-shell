@@ -369,9 +369,8 @@ fn print_metadata(path: &Path, long_format: bool, classify: bool) {
 fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
     let mut total_blocks = 0.0;
 
-    // Assuming physical_block_size and ls_block_size are constants for all files in this context
-    let physical_block_size = 4096.0; // Common filesystem block size in bytes
-    let ls_block_size = 1024.0; // Block size used by `ls` in bytes
+    // `ls` reports totals in 1024-byte blocks; `st_blocks` (from stat) is in 512-byte units.
+    let ls_block_size = 1024.0;
 
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -398,15 +397,12 @@ fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
                 continue;
             }
         };
-        let file_physical_blocks_in_use = metadata.blocks() as f64; // st_blocks reports 512-byte blocks
-        let blocks_used = (file_physical_blocks_in_use * 512.0 / physical_block_size)
-            * (physical_block_size / ls_block_size);
-        total_blocks += blocks_used;
+        total_blocks += metadata.blocks() as f64 * 512.0 / ls_block_size;
     }
 
     // Accurately calculate blocks for "." and ".."
-    let dot_blocks = calculate_dir_blocks(dir, physical_block_size, ls_block_size);
-    let dotdot_blocks = calculate_dir_blocks(&dir.join(".."), physical_block_size, ls_block_size);
+    let dot_blocks = calculate_dir_blocks(dir, ls_block_size);
+    let dotdot_blocks = calculate_dir_blocks(&dir.join(".."), ls_block_size);
     if all {
         total_blocks += dot_blocks + dotdot_blocks;
     }
@@ -415,12 +411,9 @@ fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
     total_blocks.ceil() as u64
 }
 
-fn calculate_dir_blocks(dir: &Path, physical_block_size: f64, ls_block_size: f64) -> f64 {
+fn calculate_dir_blocks(dir: &Path, ls_block_size: f64) -> f64 {
     fs::metadata(dir)
-        .map(|metadata| {
-            let blocks_in_use = metadata.blocks() as f64; // st_blocks reports 512-byte blocks
-            (blocks_in_use * 512.0 / physical_block_size) * (physical_block_size / ls_block_size)
-        })
+        .map(|metadata| metadata.blocks() as f64 * 512.0 / ls_block_size)
         .unwrap_or(0.0)
 }
 
