@@ -499,3 +499,157 @@ fn format_permissions(mode: mode_t) -> String {
     perms
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::CString;
+    use std::fs;
+    use std::os::unix::fs::symlink;
+    use std::os::unix::net::UnixListener;
+    use std::path::PathBuf;
+
+    fn temp_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("zero_shell_test_{}_{}", std::process::id(), name))
+    }
+
+    fn as_str_vec(v: &[String]) -> Vec<&str> {
+        v.iter().map(|s| s.as_str()).collect()
+    }
+
+    #[test]
+    fn parse_flags_expands_combined_short_flags() {
+        assert_eq!(as_str_vec(&parse_flags(&["-la"])), vec!["-l", "-a"]);
+    }
+
+    #[test]
+    fn parse_flags_leaves_separate_flags_untouched() {
+        assert_eq!(as_str_vec(&parse_flags(&["-l", "-a"])), vec!["-l", "-a"]);
+    }
+
+    #[test]
+    fn parse_flags_leaves_non_flag_arguments_untouched() {
+        assert_eq!(as_str_vec(&parse_flags(&["file.txt"])), vec!["file.txt"]);
+    }
+
+    #[test]
+    fn parse_flags_handles_mixed_flags_and_paths() {
+        assert_eq!(
+            as_str_vec(&parse_flags(&["-la", "file.txt"])),
+            vec!["-l", "-a", "file.txt"]
+        );
+    }
+
+    #[test]
+    fn format_permissions_regular_file() {
+        assert_eq!(format_permissions(0o100644), "-rw-r--r--");
+    }
+
+    #[test]
+    fn format_permissions_directory() {
+        assert_eq!(format_permissions(0o040755), "drwxr-xr-x");
+    }
+
+    #[test]
+    fn format_permissions_executable() {
+        assert_eq!(format_permissions(0o100777), "-rwxrwxrwx");
+    }
+
+    #[test]
+    fn format_permissions_symlink() {
+        assert_eq!(format_permissions(0o120777), "lrwxrwxrwx");
+    }
+
+    #[test]
+    fn classification_char_for_directory() {
+        let path = temp_path("classify_dir");
+        let _ = fs::remove_dir_all(&path);
+        fs::create_dir_all(&path).unwrap();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(get_file_classification_char(&metadata), "/");
+        fs::remove_dir_all(&path).unwrap();
+    }
+
+    #[test]
+    fn classification_char_for_executable_file() {
+        let path = temp_path("classify_exec");
+        fs::write(&path, b"").unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(get_file_classification_char(&metadata), "*");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn classification_char_for_plain_file() {
+        let path = temp_path("classify_plain");
+        fs::write(&path, b"").unwrap();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(get_file_classification_char(&metadata), "");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn classification_char_for_symlink() {
+        let target = temp_path("classify_symlink_target");
+        let link = temp_path("classify_symlink_link");
+        fs::write(&target, b"").unwrap();
+        let _ = fs::remove_file(&link);
+        symlink(&target, &link).unwrap();
+        let metadata = fs::symlink_metadata(&link).unwrap();
+        assert_eq!(get_file_classification_char(&metadata), "@");
+        fs::remove_file(&link).unwrap();
+        fs::remove_file(&target).unwrap();
+    }
+
+    #[test]
+    fn classification_char_for_fifo() {
+        let path = temp_path("classify_fifo");
+        let _ = fs::remove_file(&path);
+        let c_path = CString::new(path.to_str().unwrap()).unwrap();
+        let result = unsafe { libc::mkfifo(c_path.as_ptr(), 0o644) };
+        assert_eq!(result, 0, "mkfifo failed");
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(get_file_classification_char(&metadata), "|");
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn classification_char_for_socket() {
+        let path = temp_path("classify_socket");
+        let _ = fs::remove_file(&path);
+        let listener = UnixListener::bind(&path).unwrap();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        assert_eq!(get_file_classification_char(&metadata), "=");
+        drop(listener);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn list_directory_entry_short_format_appends_classification_char() {
+        let path = temp_path("entry_short_exec");
+        fs::write(&path, b"").unwrap();
+        let mut perms = fs::metadata(&path).unwrap().permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&path, perms).unwrap();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        let entry = list_directory_entry(&path, &metadata, true, false);
+        let expected_name = path.file_name().unwrap().to_string_lossy();
+        assert_eq!(entry, format!("{}*", expected_name));
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn list_directory_entry_long_format_includes_size_and_name() {
+        let path = temp_path("entry_long_plain");
+        fs::write(&path, b"hello").unwrap();
+        let metadata = fs::symlink_metadata(&path).unwrap();
+        let entry = list_directory_entry(&path, &metadata, false, true);
+        assert!(entry.starts_with("-rw"), "unexpected entry: {}", entry);
+        assert!(entry.contains(&format!("{:>6}", metadata.len())));
+        assert!(entry.ends_with("entry_long_plain"));
+        fs::remove_file(&path).unwrap();
+    }
+}
+
