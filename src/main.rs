@@ -52,10 +52,9 @@ fn main() {
 
         let mut input = String::new();
         if io::stdin().read_line(&mut input).is_ok() {
-            let input = input.trim();
-            let mut parts = input.split_whitespace();
-            let command = parts.next().unwrap_or("");
-            let args = parts.collect::<Vec<&str>>();
+            let tokens = tokenize(input.trim());
+            let command = tokens.first().map(|s| s.as_str()).unwrap_or("");
+            let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
 
             match command {
                 "cd" => {
@@ -209,6 +208,46 @@ fn parse_flags(args: &[&str]) -> Vec<String> {
     }
 
     parsed_flags
+}
+
+// Splits a line into tokens, treating single- or double-quoted spans as a
+// single argument so that e.g. `mkdir "my dir"` produces one argument
+// containing a space instead of two.
+fn tokenize(input: &str) -> Vec<String> {
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quotes = false;
+    let mut in_double_quotes = false;
+    let mut has_token = false;
+
+    for c in input.chars() {
+        match c {
+            '\'' if !in_double_quotes => {
+                in_single_quotes = !in_single_quotes;
+                has_token = true;
+            }
+            '"' if !in_single_quotes => {
+                in_double_quotes = !in_double_quotes;
+                has_token = true;
+            }
+            c if c.is_whitespace() && !in_single_quotes && !in_double_quotes => {
+                if has_token {
+                    tokens.push(std::mem::take(&mut current));
+                    has_token = false;
+                }
+            }
+            c => {
+                current.push(c);
+                has_token = true;
+            }
+        }
+    }
+
+    if has_token {
+        tokens.push(current);
+    }
+
+    tokens
 }
 
 fn list_directory_entry(
@@ -537,6 +576,42 @@ mod tests {
             as_str_vec(&parse_flags(&["-la", "file.txt"])),
             vec!["-l", "-a", "file.txt"]
         );
+    }
+
+    #[test]
+    fn tokenize_splits_on_whitespace() {
+        assert_eq!(tokenize("ls -la /tmp"), vec!["ls", "-la", "/tmp"]);
+    }
+
+    #[test]
+    fn tokenize_keeps_double_quoted_span_as_one_token() {
+        assert_eq!(
+            tokenize(r#"mkdir "my dir""#),
+            vec!["mkdir", "my dir"]
+        );
+    }
+
+    #[test]
+    fn tokenize_keeps_single_quoted_span_as_one_token() {
+        assert_eq!(tokenize("mkdir 'my dir'"), vec!["mkdir", "my dir"]);
+    }
+
+    #[test]
+    fn tokenize_preserves_internal_whitespace_in_quotes() {
+        assert_eq!(
+            tokenize(r#"echo "a   b""#),
+            vec!["echo", "a   b"]
+        );
+    }
+
+    #[test]
+    fn tokenize_concatenates_adjacent_quoted_and_unquoted_text() {
+        assert_eq!(tokenize(r#"echo hello"world""#), vec!["echo", "helloworld"]);
+    }
+
+    #[test]
+    fn tokenize_handles_empty_input() {
+        assert_eq!(tokenize(""), Vec::<String>::new());
     }
 
     #[test]
