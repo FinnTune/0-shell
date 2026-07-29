@@ -119,13 +119,7 @@ fn main() {
                                 Ok(metadata) => {
                                     println!(
                                         "{}",
-                                        list_directory_entry(
-                                            path,
-                                            &metadata,
-                                            classify,
-                                            all,
-                                            long_format
-                                        )
+                                        list_directory_entry(path, &metadata, classify, long_format)
                                     );
                                 }
                                 Err(e) => eprintln!("ls: cannot access '{}': {}", p, e),
@@ -220,7 +214,6 @@ fn list_directory_entry(
     path: &Path,
     metadata: &Metadata,
     classify: bool,
-    all: bool,
     long_format: bool,
 ) -> String {
     let file_type_indicator = format_permissions(metadata.mode() as mode_t);
@@ -252,43 +245,13 @@ fn list_directory_entry(
         "".to_string()
     };
 
-    if classify && !all && !long_format {
-        format!("{}{}", name, classification_char)
-    } else if all && classify && !long_format {
-        format!("{}{}", name, classification_char)
-    } else if all && !classify && !long_format {
-        format!("{}", name)
-    } else if long_format && all && !classify {
-        format!(
-            "{} {:>3} {} {} {:>6} {} {}",
-            file_type_indicator, num_links, owner, group, size, datetime_str, name
-        )
-    } else if !classify && !all && !long_format {
-        format!("{}", name)
-    } else if classify && all && long_format {
-        // Append the classification_char to the formatted string
+    if long_format {
         format!(
             "{} {:>3} {} {} {:>6} {} {}{}",
-            file_type_indicator,
-            num_links,
-            owner,
-            group,
-            size,
-            datetime_str,
-            name,
-            classification_char
+            file_type_indicator, num_links, owner, group, size, datetime_str, name, classification_char
         )
     } else {
-        format!(
-            "{} {:>3} {} {} {:>6} {} {}",
-            file_type_indicator,
-            num_links,
-            owner,
-            group,
-            size,
-            datetime_str,
-            name,
-        )
+        format!("{}{}", name, classification_char)
     }
 }
 
@@ -339,8 +302,8 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
         println!("total {}", total_blocks);
 
         // Manually print '.' and '..' with their metadata
-        print_metadata(dir, true, classify, all); // Current directory '.'
-        print_metadata(&dir.join(".."), true, classify, all); // Parent directory '..'
+        print_metadata(dir, true, classify); // Current directory '.'
+        print_metadata(&dir.join(".."), true, classify); // Parent directory '..'
     } else if long_format && !all {
         let total_blocks = calculate_total_blocks(dir, all);
         println!("total {}", total_blocks);
@@ -368,7 +331,7 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
                 continue;
             }
         };
-        let display_str = list_directory_entry(&path, &metadata, classify, all, long_format);
+        let display_str = list_directory_entry(&path, &metadata, classify, long_format);
 
         if length == 0 {
             println!();
@@ -387,7 +350,7 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
     }
 }
 
-fn print_metadata(path: &Path, long_format: bool, classify: bool, all: bool) {
+fn print_metadata(path: &Path, long_format: bool, classify: bool) {
     if long_format {
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
@@ -398,7 +361,7 @@ fn print_metadata(path: &Path, long_format: bool, classify: bool, all: bool) {
         };
         println!(
             "{}",
-            list_directory_entry(path, &metadata, classify, all, long_format)
+            list_directory_entry(path, &metadata, classify, long_format)
         );
     }
 }
