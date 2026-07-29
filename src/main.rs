@@ -12,6 +12,7 @@ use libc::{getgrgid_r, getpwuid_r, group, passwd};
 use std::ffi::CStr;
 use std::mem;
 use std::ptr;
+use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
 use libc::mode_t;
 
@@ -256,8 +257,15 @@ fn list_directory_entry(
 }
 
 fn get_file_classification_char(metadata: &Metadata) -> String {
-    if metadata.is_dir() {
+    let file_type = metadata.file_type();
+    if file_type.is_dir() {
         "/".to_string()
+    } else if file_type.is_symlink() {
+        "@".to_string()
+    } else if file_type.is_fifo() {
+        "|".to_string()
+    } else if file_type.is_socket() {
+        "=".to_string()
     } else if metadata.permissions().mode() & 0o111 != 0 {
         "*".to_string()
     } else {
