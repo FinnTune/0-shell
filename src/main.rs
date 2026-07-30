@@ -48,6 +48,131 @@ fn copy_or_move_many(args: &[&str], label: &str, op: impl Fn(&Path, &Path) -> Re
     }
 }
 
+// Runs a single command, writing its normal output to `output` (so callers
+// can redirect it to a file or capture it for a pipeline) and any piped-in
+// input via `input`. Errors always go to the real stderr, regardless of
+// where `output` points, matching how redirection/piping normally only
+// affects stdout.
+fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn Write) {
+    match command {
+        "cd" => {
+            let new_dir = match args.first() {
+                Some(dir) => dir.to_string(),
+                None => match env::var("HOME") {
+                    Ok(home) => home,
+                    Err(_) => {
+                        eprintln!("cd: HOME not set");
+                        return;
+                    }
+                },
+            };
+            if let Err(e) = env::set_current_dir(Path::new(&new_dir)) {
+                eprintln!("cd: {}: {}", new_dir, e);
+            }
+        }
+        "exit" => exit(0),
+        "echo" => {
+            let echo_str = args.join(" ");
+            let _ = writeln!(output, "{}", echo_str);
+        }
+        "pwd" => {
+            let _ = writeln!(output, "{}", env::current_dir().unwrap().display());
+        }
+        "cat" => {
+            if args.is_empty() {
+                if input.is_empty() {
+                    eprintln!("cat: No file specified");
+                } else {
+                    let _ = write!(output, "{}", input);
+                }
+            } else {
+                for filename in args {
+                    match std::fs::read_to_string(filename) {
+                        Ok(contents) => {
+                            let _ = write!(output, "{}", contents);
+                        }
+                        Err(e) => eprintln!("cat: {}: {}", filename, e),
+                    }
+                }
+            }
+        }
+        "ls" => {
+            let parsed_args = parse_flags(args);
+            let long_format = parsed_args.contains(&"-l".to_string());
+            let all = parsed_args.contains(&"-a".to_string());
+            let classify = parsed_args.contains(&"-F".to_string());
+            let paths: Vec<&String> = parsed_args.iter().filter(|a| !a.starts_with('-')).collect();
+
+            if paths.is_empty() {
+                list_directory(Path::new("."), long_format, all, classify, output);
+            } else {
+                let show_headers = paths.len() > 1;
+                for (i, p) in paths.iter().enumerate() {
+                    let path = Path::new(p.as_str());
+                    match fs::metadata(path) {
+                        Ok(metadata) if metadata.is_dir() => {
+                            if show_headers {
+                                if i > 0 {
+                                    let _ = writeln!(output);
+                                }
+                                let _ = writeln!(output, "{}:", p);
+                            }
+                            list_directory(path, long_format, all, classify, output);
+                        }
+                        Ok(metadata) => {
+                            let _ = writeln!(
+                                output,
+                                "{}",
+                                list_directory_entry(path, &metadata, classify, long_format)
+                            );
+                        }
+                        Err(e) => eprintln!("ls: cannot access '{}': {}", p, e),
+                    }
+                }
+            }
+        }
+        "rm" => {
+            let mut recursive = false;
+            let mut files = Vec::new();
+
+            for &arg in args {
+                if arg == "-r" {
+                    recursive = true;
+                } else {
+                    files.push(arg);
+                }
+            }
+
+            if files.is_empty() {
+                eprintln!("rm: missing operand");
+            } else {
+                for file in files {
+                    let path = Path::new(file);
+                    if let Err(e) = remove_item(path, recursive) {
+                        eprintln!("rm: {}: {}", file, e);
+                    }
+                }
+            }
+        }
+        "cp" => copy_or_move_many(args, "cp", copy_file),
+        "mv" => copy_or_move_many(args, "mv", move_item),
+        "mkdir" => {
+            if args.is_empty() {
+                eprintln!("mkdir: missing operand");
+            } else {
+                for &dir_name in args {
+                    let path = Path::new(dir_name);
+                    match fs::create_dir(path) {
+                        Ok(_) => {}
+                        Err(e) => eprintln!("mkdir: {}: {}", dir_name, e),
+                    }
+                }
+            }
+        }
+        _ => eprintln!("{}: command not found", command),
+    }
+}
+
 fn main() {
     loop {
         print!("$ ");
@@ -55,130 +180,16 @@ fn main() {
 
         let mut input = String::new();
         let bytes_read = io::stdin().read_line(&mut input).unwrap_or(0);
-        if bytes_read > 0 {
-            let tokens = tokenize(input.trim());
-            let command = tokens.first().map(|s| s.as_str()).unwrap_or("");
-            let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
-
-            match command {
-                "cd" => {
-                    let new_dir = match args.first() {
-                        Some(dir) => dir.to_string(),
-                        None => match env::var("HOME") {
-                            Ok(home) => home,
-                            Err(_) => {
-                                eprintln!("cd: HOME not set");
-                                continue;
-                            }
-                        },
-                    };
-                    if let Err(e) = env::set_current_dir(Path::new(&new_dir)) {
-                        eprintln!("cd: {}: {}", new_dir, e);
-                    }
-                }
-                "exit" => exit(0),
-                "echo" => {
-                    let echo_str = args.join(" ");
-                    println!("{}", echo_str);
-                }
-                "pwd" => {
-                    println!("{}", env::current_dir().unwrap().display());
-                }
-                "cat" => {
-                    if args.is_empty() {
-                        eprintln!("cat: No file specified");
-                    } else {
-                        for filename in args {
-                            match std::fs::read_to_string(filename) {
-                                Ok(contents) => print!("{}", contents),
-                                Err(e) => eprintln!("cat: {}: {}", filename, e),
-                            }
-                        }
-                    }
-                }
-                "ls" => {
-                    let parsed_args = parse_flags(&args);
-                    let long_format = parsed_args.contains(&"-l".to_string());
-                    let all = parsed_args.contains(&"-a".to_string());
-                    let classify = parsed_args.contains(&"-F".to_string());
-                    let paths: Vec<&String> =
-                        parsed_args.iter().filter(|a| !a.starts_with('-')).collect();
-
-                    if paths.is_empty() {
-                        list_directory(Path::new("."), long_format, all, classify);
-                    } else {
-                        let show_headers = paths.len() > 1;
-                        for (i, p) in paths.iter().enumerate() {
-                            let path = Path::new(p.as_str());
-                            match fs::metadata(path) {
-                                Ok(metadata) if metadata.is_dir() => {
-                                    if show_headers {
-                                        if i > 0 {
-                                            println!();
-                                        }
-                                        println!("{}:", p);
-                                    }
-                                    list_directory(path, long_format, all, classify);
-                                }
-                                Ok(metadata) => {
-                                    println!(
-                                        "{}",
-                                        list_directory_entry(
-                                            path,
-                                            &metadata,
-                                            classify,
-                                            long_format
-                                        )
-                                    );
-                                }
-                                Err(e) => eprintln!("ls: cannot access '{}': {}", p, e),
-                            }
-                        }
-                    }
-                }
-                "rm" => {
-                    let mut recursive = false;
-                    let mut files = Vec::new();
-
-                    for arg in args {
-                        if arg == "-r" {
-                            recursive = true;
-                        } else {
-                            files.push(arg);
-                        }
-                    }
-
-                    if files.is_empty() {
-                        eprintln!("rm: missing operand");
-                    } else {
-                        for file in files {
-                            let path = Path::new(file);
-                            if let Err(e) = remove_item(path, recursive) {
-                                eprintln!("rm: {}: {}", file, e);
-                            }
-                        }
-                    }
-                }
-                "cp" => copy_or_move_many(&args, "cp", copy_file),
-                "mv" => copy_or_move_many(&args, "mv", move_item),
-                "mkdir" => {
-                    if args.is_empty() {
-                        eprintln!("mkdir: missing operand");
-                    } else {
-                        for dir_name in args {
-                            let path = Path::new(dir_name);
-                            match fs::create_dir(path) {
-                                Ok(_) => {}
-                                Err(e) => eprintln!("mkdir: {}: {}", dir_name, e),
-                            }
-                        }
-                    }
-                }
-                _ => eprintln!("{}: command not found", command),
-            }
-        } else {
+        if bytes_read == 0 {
             println!();
             exit(0); // Exit on Ctrl+D
         }
+
+        let tokens = tokenize(input.trim());
+        let command = tokens.first().map(|s| s.as_str()).unwrap_or("");
+        let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
+
+        let mut stdout = io::stdout();
+        execute_command(command, &args, "", &mut stdout);
     }
 }

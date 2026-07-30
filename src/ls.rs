@@ -3,6 +3,7 @@ use chrono::{Local, TimeZone};
 use libc::mode_t;
 use std::fs;
 use std::fs::Metadata;
+use std::io::Write;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::Path;
 
@@ -77,7 +78,13 @@ fn get_file_classification_char(metadata: &Metadata) -> String {
 
 // When printing the total, consider how you want to represent this total in terms of your filesystem's block size.
 // The division or adjustment might be needed if you're converting between block sizes or aligning with how `ls` reports its total.
-pub fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
+pub fn list_directory(
+    dir: &Path,
+    long_format: bool,
+    all: bool,
+    classify: bool,
+    output: &mut dyn Write,
+) {
     let read_dir = match fs::read_dir(dir) {
         Ok(read_dir) => read_dir,
         Err(e) => {
@@ -109,24 +116,24 @@ pub fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) 
 
     if long_format && all {
         let total_blocks = calculate_total_blocks(dir, all);
-        println!("total {}", total_blocks);
+        let _ = writeln!(output, "total {}", total_blocks);
 
         // Manually print '.' and '..' with their metadata
-        print_metadata(dir, true, classify); // Current directory '.'
-        print_metadata(&dir.join(".."), true, classify); // Parent directory '..'
+        print_metadata(dir, true, classify, output); // Current directory '.'
+        print_metadata(&dir.join(".."), true, classify, output); // Parent directory '..'
     } else if long_format && !all {
         let total_blocks = calculate_total_blocks(dir, all);
-        println!("total {}", total_blocks);
+        let _ = writeln!(output, "total {}", total_blocks);
     }
 
     if all && !long_format && !classify {
-        print!(".  ");
-        print!("..  ");
+        let _ = write!(output, ".  ");
+        let _ = write!(output, "..  ");
     }
 
     if all && !long_format && classify {
-        print!("./  ");
-        print!("../  ");
+        let _ = write!(output, "./  ");
+        let _ = write!(output, "../  ");
     }
 
     // Print remaining entries
@@ -144,21 +151,21 @@ pub fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) 
         let display_str = list_directory_entry(&path, &metadata, classify, long_format);
 
         if length == 0 {
-            println!();
+            let _ = writeln!(output);
         } else if !long_format {
             if entry.path() != entries[length - 1].path() {
-                print!("{}  ", display_str);
+                let _ = write!(output, "{}  ", display_str);
             } else {
-                print!("{}  ", display_str);
-                println!()
+                let _ = write!(output, "{}  ", display_str);
+                let _ = writeln!(output);
             }
         } else {
-            println!("{}", display_str);
+            let _ = writeln!(output, "{}", display_str);
         }
     }
 }
 
-fn print_metadata(path: &Path, long_format: bool, classify: bool) {
+fn print_metadata(path: &Path, long_format: bool, classify: bool, output: &mut dyn Write) {
     if long_format {
         let metadata = match fs::metadata(path) {
             Ok(metadata) => metadata,
@@ -167,7 +174,8 @@ fn print_metadata(path: &Path, long_format: bool, classify: bool) {
                 return;
             }
         };
-        println!(
+        let _ = writeln!(
+            output,
             "{}",
             list_directory_entry(path, &metadata, classify, long_format)
         );
