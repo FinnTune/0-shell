@@ -5,9 +5,10 @@ mod users;
 
 use fileops::{copy_file, move_item, remove_item};
 use ls::{list_directory, list_directory_entry};
-use parser::{parse_flags, tokenize};
+use parser::{parse_flags, parse_pipeline, tokenize, Redirect};
 use std::env;
 use std::fs;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::Path;
 use std::process::exit;
@@ -173,6 +174,43 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
     }
 }
 
+// Runs a pipeline of one or more stages, feeding each stage's captured
+// output to the next as `input`. The last stage writes to `redirect`'s
+// target file if present, otherwise to real stdout.
+fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
+    let last_index = stages.len() - 1;
+    let mut piped_input = String::new();
+
+    for (i, stage) in stages.iter().enumerate() {
+        let command = stage[0].as_str();
+        let args: Vec<&str> = stage[1..].iter().map(|s| s.as_str()).collect();
+
+        if i != last_index {
+            let mut buffer: Vec<u8> = Vec::new();
+            execute_command(command, &args, &piped_input, &mut buffer);
+            piped_input = String::from_utf8_lossy(&buffer).into_owned();
+            continue;
+        }
+
+        match redirect {
+            None => {
+                let mut stdout = io::stdout();
+                execute_command(command, &args, &piped_input, &mut stdout);
+            }
+            Some(Redirect::Overwrite(filename)) => match File::create(filename) {
+                Ok(mut file) => execute_command(command, &args, &piped_input, &mut file),
+                Err(e) => eprintln!("{}: {}", filename, e),
+            },
+            Some(Redirect::Append(filename)) => {
+                match OpenOptions::new().create(true).append(true).open(filename) {
+                    Ok(mut file) => execute_command(command, &args, &piped_input, &mut file),
+                    Err(e) => eprintln!("{}: {}", filename, e),
+                }
+            }
+        }
+    }
+}
+
 fn main() {
     loop {
         print!("$ ");
@@ -186,10 +224,13 @@ fn main() {
         }
 
         let tokens = tokenize(input.trim());
-        let command = tokens.first().map(|s| s.as_str()).unwrap_or("");
-        let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
+        if tokens.is_empty() {
+            continue;
+        }
 
-        let mut stdout = io::stdout();
-        execute_command(command, &args, "", &mut stdout);
+        match parse_pipeline(&tokens) {
+            Ok((stages, redirect)) => run_pipeline(&stages, redirect.as_ref()),
+            Err(e) => eprintln!("{}", e),
+        }
     }
 }

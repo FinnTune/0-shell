@@ -54,6 +54,51 @@ pub fn tokenize(input: &str) -> Vec<String> {
     tokens
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Redirect {
+    Overwrite(String),
+    Append(String),
+}
+
+// Splits already-tokenized input into pipeline stages on `|`, and pulls a
+// trailing `>`/`>>` (with its filename) off the last stage into a Redirect.
+// Errors on an empty stage (e.g. a leading/trailing/doubled `|`) or a
+// redirection operator with no filename after it.
+pub fn parse_pipeline(tokens: &[String]) -> Result<(Vec<Vec<String>>, Option<Redirect>), String> {
+    let mut stages: Vec<Vec<String>> = vec![Vec::new()];
+    for token in tokens {
+        if token == "|" {
+            stages.push(Vec::new());
+        } else {
+            stages.last_mut().unwrap().push(token.clone());
+        }
+    }
+
+    if stages.iter().any(|stage| stage.is_empty()) {
+        return Err("syntax error: unexpected '|'".to_string());
+    }
+
+    let last = stages.last_mut().unwrap();
+    let redirect = match last.iter().position(|t| t == ">" || t == ">>") {
+        None => None,
+        Some(pos) => {
+            if pos + 1 >= last.len() {
+                return Err("syntax error: expected filename after redirection".to_string());
+            }
+            let is_append = last[pos] == ">>";
+            let filename = last[pos + 1].clone();
+            last.truncate(pos);
+            Some(if is_append {
+                Redirect::Append(filename)
+            } else {
+                Redirect::Overwrite(filename)
+            })
+        }
+    };
+
+    Ok((stages, redirect))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -113,5 +158,57 @@ mod tests {
     #[test]
     fn tokenize_handles_empty_input() {
         assert_eq!(tokenize(""), Vec::<String>::new());
+    }
+
+    fn tokens(strs: &[&str]) -> Vec<String> {
+        strs.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_pipeline_single_command_has_no_redirect() {
+        let (stages, redirect) = parse_pipeline(&tokens(&["ls", "-la"])).unwrap();
+        assert_eq!(stages, vec![tokens(&["ls", "-la"])]);
+        assert_eq!(redirect, None);
+    }
+
+    #[test]
+    fn parse_pipeline_splits_stages_on_pipe() {
+        let (stages, redirect) = parse_pipeline(&tokens(&["ls", "|", "cat"])).unwrap();
+        assert_eq!(stages, vec![tokens(&["ls"]), tokens(&["cat"])]);
+        assert_eq!(redirect, None);
+    }
+
+    #[test]
+    fn parse_pipeline_detects_overwrite_redirect() {
+        let (stages, redirect) = parse_pipeline(&tokens(&["echo", "hi", ">", "out.txt"])).unwrap();
+        assert_eq!(stages, vec![tokens(&["echo", "hi"])]);
+        assert_eq!(redirect, Some(Redirect::Overwrite("out.txt".to_string())));
+    }
+
+    #[test]
+    fn parse_pipeline_detects_append_redirect() {
+        let (stages, redirect) = parse_pipeline(&tokens(&["echo", "hi", ">>", "out.txt"])).unwrap();
+        assert_eq!(stages, vec![tokens(&["echo", "hi"])]);
+        assert_eq!(redirect, Some(Redirect::Append("out.txt".to_string())));
+    }
+
+    #[test]
+    fn parse_pipeline_redirect_only_applies_to_last_stage() {
+        let (stages, redirect) =
+            parse_pipeline(&tokens(&["ls", "|", "cat", ">", "out.txt"])).unwrap();
+        assert_eq!(stages, vec![tokens(&["ls"]), tokens(&["cat"])]);
+        assert_eq!(redirect, Some(Redirect::Overwrite("out.txt".to_string())));
+    }
+
+    #[test]
+    fn parse_pipeline_errors_on_empty_stage() {
+        assert!(parse_pipeline(&tokens(&["ls", "|"])).is_err());
+        assert!(parse_pipeline(&tokens(&["|", "ls"])).is_err());
+        assert!(parse_pipeline(&tokens(&["ls", "|", "|", "cat"])).is_err());
+    }
+
+    #[test]
+    fn parse_pipeline_errors_on_redirect_without_filename() {
+        assert!(parse_pipeline(&tokens(&["echo", "hi", ">"])).is_err());
     }
 }
