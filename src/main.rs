@@ -55,10 +55,22 @@ fn copy_or_move_many(args: &[&str], label: &str, op: impl Fn(&Path, &Path) -> Re
 // input via `input`. Errors always go to the real stderr, regardless of
 // where `output` points, matching how redirection/piping normally only
 // affects stdout.
-fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn Write) {
+fn execute_command(
+    command: &str,
+    args: &[&str],
+    input: &str,
+    output: &mut dyn Write,
+    previous_dir: &mut Option<String>,
+) {
     match command {
         "cd" => {
-            let new_dir = if let Some(dir) = args.first() {
+            let new_dir = if args.first().copied() == Some("-") {
+                let Some(prev) = previous_dir.clone() else {
+                    eprintln!("cd: OLDPWD not set");
+                    return;
+                };
+                prev
+            } else if let Some(dir) = args.first() {
                 dir.to_string()
             } else {
                 let Ok(home) = env::var("HOME") else {
@@ -67,8 +79,17 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                 };
                 home
             };
+
+            let current = env::current_dir().ok();
             if let Err(e) = env::set_current_dir(Path::new(&new_dir)) {
                 eprintln!("cd: {new_dir}: {e}");
+                return;
+            }
+            if let Some(current) = current {
+                *previous_dir = Some(current.display().to_string());
+            }
+            if args.first().copied() == Some("-") {
+                let _ = writeln!(output, "{new_dir}");
             }
         }
         "exit" => exit(0),
@@ -102,10 +123,18 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
             let long_format = parsed_args.contains(&"-l".to_string());
             let all = parsed_args.contains(&"-a".to_string());
             let classify = parsed_args.contains(&"-F".to_string());
+            let recursive = parsed_args.contains(&"-R".to_string());
             let paths: Vec<&String> = parsed_args.iter().filter(|a| !a.starts_with('-')).collect();
 
             if paths.is_empty() {
-                list_directory(Path::new("."), long_format, all, classify, output);
+                list_directory(
+                    Path::new("."),
+                    long_format,
+                    all,
+                    classify,
+                    recursive,
+                    output,
+                );
             } else {
                 let show_headers = paths.len() > 1;
                 for (i, p) in paths.iter().enumerate() {
@@ -118,7 +147,7 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                                 }
                                 let _ = writeln!(output, "{p}:");
                             }
-                            list_directory(path, long_format, all, classify, output);
+                            list_directory(path, long_format, all, classify, recursive, output);
                         }
                         Ok(metadata) => {
                             let _ = writeln!(
@@ -158,14 +187,22 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
         "cp" => copy_or_move_many(args, "cp", copy_file),
         "mv" => copy_or_move_many(args, "mv", move_item),
         "mkdir" => {
-            if args.is_empty() {
+            let parsed_args = parse_flags(args);
+            let make_parents = parsed_args.contains(&"-p".to_string());
+            let dirs: Vec<&String> = parsed_args.iter().filter(|a| !a.starts_with('-')).collect();
+
+            if dirs.is_empty() {
                 eprintln!("mkdir: missing operand");
             } else {
-                for &dir_name in args {
+                for dir_name in dirs {
                     let path = Path::new(dir_name);
-                    match fs::create_dir(path) {
-                        Ok(()) => {}
-                        Err(e) => eprintln!("mkdir: {dir_name}: {e}"),
+                    let result = if make_parents {
+                        fs::create_dir_all(path)
+                    } else {
+                        fs::create_dir(path)
+                    };
+                    if let Err(e) = result {
+                        eprintln!("mkdir: {dir_name}: {e}");
                     }
                 }
             }
@@ -177,7 +214,11 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
 // Runs a pipeline of one or more stages, feeding each stage's captured
 // output to the next as `input`. The last stage writes to `redirect`'s
 // target file if present, otherwise to real stdout.
-fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
+fn run_pipeline(
+    stages: &[Vec<String>],
+    redirect: Option<&Redirect>,
+    previous_dir: &mut Option<String>,
+) {
     let last_index = stages.len() - 1;
     let mut piped_input = String::new();
 
@@ -187,7 +228,7 @@ fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
 
         if i != last_index {
             let mut buffer: Vec<u8> = Vec::new();
-            execute_command(command, &args, &piped_input, &mut buffer);
+            execute_command(command, &args, &piped_input, &mut buffer, previous_dir);
             piped_input = String::from_utf8_lossy(&buffer).into_owned();
             continue;
         }
@@ -195,15 +236,19 @@ fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
         match redirect {
             None => {
                 let mut stdout = io::stdout();
-                execute_command(command, &args, &piped_input, &mut stdout);
+                execute_command(command, &args, &piped_input, &mut stdout, previous_dir);
             }
             Some(Redirect::Overwrite(filename)) => match File::create(filename) {
-                Ok(mut file) => execute_command(command, &args, &piped_input, &mut file),
+                Ok(mut file) => {
+                    execute_command(command, &args, &piped_input, &mut file, previous_dir);
+                }
                 Err(e) => eprintln!("{filename}: {e}"),
             },
             Some(Redirect::Append(filename)) => {
                 match OpenOptions::new().create(true).append(true).open(filename) {
-                    Ok(mut file) => execute_command(command, &args, &piped_input, &mut file),
+                    Ok(mut file) => {
+                        execute_command(command, &args, &piped_input, &mut file, previous_dir);
+                    }
                     Err(e) => eprintln!("{filename}: {e}"),
                 }
             }
@@ -212,6 +257,8 @@ fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
 }
 
 fn main() {
+    let mut previous_dir: Option<String> = None;
+
     loop {
         print!("$ ");
         io::stdout().flush().unwrap();
@@ -230,7 +277,7 @@ fn main() {
         let tokens = glob::expand_all(&tokens);
 
         match parse_pipeline(&tokens) {
-            Ok((stages, redirect)) => run_pipeline(&stages, redirect.as_ref()),
+            Ok((stages, redirect)) => run_pipeline(&stages, redirect.as_ref(), &mut previous_dir),
             Err(e) => eprintln!("{e}"),
         }
     }

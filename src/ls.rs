@@ -5,7 +5,7 @@ use std::fs;
 use std::fs::Metadata;
 use std::io::Write;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub fn list_directory_entry(
     path: &Path,
@@ -75,6 +75,7 @@ pub fn list_directory(
     long_format: bool,
     all: bool,
     classify: bool,
+    recursive: bool,
     output: &mut dyn Write,
 ) {
     let read_dir = match fs::read_dir(dir) {
@@ -153,6 +154,20 @@ pub fn list_directory(
             }
         } else {
             let _ = writeln!(output, "{display_str}");
+        }
+    }
+
+    if recursive {
+        let subdirs: Vec<PathBuf> = entries
+            .iter()
+            .map(|entry| entry.path())
+            .filter(|path| path.is_dir())
+            .collect();
+
+        for subdir in subdirs {
+            let _ = writeln!(output);
+            let _ = writeln!(output, "{}:", subdir.display());
+            list_directory(&subdir, long_format, all, classify, recursive, output);
         }
     }
 }
@@ -372,5 +387,36 @@ mod tests {
         assert!(entry.contains(&format!("{:>6}", metadata.len())));
         assert!(entry.ends_with("entry_long_plain"));
         fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn list_directory_recursive_descends_into_subdirectories() {
+        let dir = temp_path("recursive_root");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/inner.txt"), b"").unwrap();
+
+        let mut output = Vec::new();
+        list_directory(&dir, false, false, false, true, &mut output);
+        let text = String::from_utf8(output).unwrap();
+
+        assert!(text.contains(&format!("{}:", dir.join("sub").display())));
+        assert!(text.contains("inner.txt"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn list_directory_non_recursive_does_not_descend() {
+        let dir = temp_path("non_recursive_root");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("sub/inner.txt"), b"").unwrap();
+
+        let mut output = Vec::new();
+        list_directory(&dir, false, false, false, false, &mut output);
+        let text = String::from_utf8(output).unwrap();
+
+        assert!(!text.contains("inner.txt"));
+        fs::remove_dir_all(&dir).unwrap();
     }
 }
