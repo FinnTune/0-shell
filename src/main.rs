@@ -12,6 +12,42 @@ use std::io::{self, Write};
 use std::path::Path;
 use std::process::exit;
 
+// Shared by the cp and mv handlers: a single source/destination pair
+// behaves as before, but with more than one source the last argument
+// must be an existing directory that every source gets copied/moved into.
+fn copy_or_move_many(args: &[&str], label: &str, op: impl Fn(&Path, &Path) -> Result<(), String>) {
+    if args.len() < 2 {
+        eprintln!("{}: missing file operand", label);
+        return;
+    }
+
+    if args.len() == 2 {
+        let source = Path::new(args[0]);
+        let destination = Path::new(args[1]);
+        if let Err(e) = op(source, destination) {
+            eprintln!("{}: {}: {}", label, source.display(), e);
+        }
+        return;
+    }
+
+    let destination = Path::new(args[args.len() - 1]);
+    if !destination.is_dir() {
+        eprintln!(
+            "{}: target '{}' is not a directory",
+            label,
+            destination.display()
+        );
+        return;
+    }
+
+    for source in &args[..args.len() - 1] {
+        let source = Path::new(source);
+        if let Err(e) = op(source, destination) {
+            eprintln!("{}: {}: {}", label, source.display(), e);
+        }
+    }
+}
+
 fn main() {
     loop {
         print!("$ ");
@@ -123,28 +159,8 @@ fn main() {
                         }
                     }
                 }
-                "cp" => {
-                    if args.len() != 2 {
-                        eprintln!("cp: wrong number of arguments");
-                    } else {
-                        let source = Path::new(args[0]);
-                        let destination = Path::new(args[1]);
-                        if let Err(e) = copy_file(source, destination) {
-                            eprintln!("cp: {}: {}", source.display(), e);
-                        }
-                    }
-                }
-                "mv" => {
-                    if args.len() != 2 {
-                        eprintln!("mv: wrong number of arguments");
-                    } else {
-                        let source = Path::new(args[0]);
-                        let destination = Path::new(args[1]);
-                        if let Err(e) = move_item(source, destination) {
-                            eprintln!("mv: {}: {}", source.display(), e);
-                        }
-                    }
-                }
+                "cp" => copy_or_move_many(&args, "cp", copy_file),
+                "mv" => copy_or_move_many(&args, "mv", move_item),
                 "mkdir" => {
                     if args.is_empty() {
                         eprintln!("mkdir: missing operand");
