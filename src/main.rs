@@ -18,7 +18,7 @@ use std::process::exit;
 // must be an existing directory that every source gets copied/moved into.
 fn copy_or_move_many(args: &[&str], label: &str, op: impl Fn(&Path, &Path) -> Result<(), String>) {
     if args.len() < 2 {
-        eprintln!("{}: missing file operand", label);
+        eprintln!("{label}: missing file operand");
         return;
     }
 
@@ -57,24 +57,23 @@ fn copy_or_move_many(args: &[&str], label: &str, op: impl Fn(&Path, &Path) -> Re
 fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn Write) {
     match command {
         "cd" => {
-            let new_dir = match args.first() {
-                Some(dir) => dir.to_string(),
-                None => match env::var("HOME") {
-                    Ok(home) => home,
-                    Err(_) => {
-                        eprintln!("cd: HOME not set");
-                        return;
-                    }
-                },
+            let new_dir = if let Some(dir) = args.first() {
+                dir.to_string()
+            } else {
+                let Ok(home) = env::var("HOME") else {
+                    eprintln!("cd: HOME not set");
+                    return;
+                };
+                home
             };
             if let Err(e) = env::set_current_dir(Path::new(&new_dir)) {
-                eprintln!("cd: {}: {}", new_dir, e);
+                eprintln!("cd: {new_dir}: {e}");
             }
         }
         "exit" => exit(0),
         "echo" => {
             let echo_str = args.join(" ");
-            let _ = writeln!(output, "{}", echo_str);
+            let _ = writeln!(output, "{echo_str}");
         }
         "pwd" => {
             let _ = writeln!(output, "{}", env::current_dir().unwrap().display());
@@ -84,15 +83,15 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                 if input.is_empty() {
                     eprintln!("cat: No file specified");
                 } else {
-                    let _ = write!(output, "{}", input);
+                    let _ = write!(output, "{input}");
                 }
             } else {
                 for filename in args {
                     match std::fs::read_to_string(filename) {
                         Ok(contents) => {
-                            let _ = write!(output, "{}", contents);
+                            let _ = write!(output, "{contents}");
                         }
-                        Err(e) => eprintln!("cat: {}: {}", filename, e),
+                        Err(e) => eprintln!("cat: {filename}: {e}"),
                     }
                 }
             }
@@ -116,7 +115,7 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                                 if i > 0 {
                                     let _ = writeln!(output);
                                 }
-                                let _ = writeln!(output, "{}:", p);
+                                let _ = writeln!(output, "{p}:");
                             }
                             list_directory(path, long_format, all, classify, output);
                         }
@@ -127,7 +126,7 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                                 list_directory_entry(path, &metadata, classify, long_format)
                             );
                         }
-                        Err(e) => eprintln!("ls: cannot access '{}': {}", p, e),
+                        Err(e) => eprintln!("ls: cannot access '{p}': {e}"),
                     }
                 }
             }
@@ -150,7 +149,7 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                 for file in files {
                     let path = Path::new(file);
                     if let Err(e) = remove_item(path, recursive) {
-                        eprintln!("rm: {}: {}", file, e);
+                        eprintln!("rm: {file}: {e}");
                     }
                 }
             }
@@ -164,13 +163,13 @@ fn execute_command(command: &str, args: &[&str], input: &str, output: &mut dyn W
                 for &dir_name in args {
                     let path = Path::new(dir_name);
                     match fs::create_dir(path) {
-                        Ok(_) => {}
-                        Err(e) => eprintln!("mkdir: {}: {}", dir_name, e),
+                        Ok(()) => {}
+                        Err(e) => eprintln!("mkdir: {dir_name}: {e}"),
                     }
                 }
             }
         }
-        _ => eprintln!("{}: command not found", command),
+        _ => eprintln!("{command}: command not found"),
     }
 }
 
@@ -183,7 +182,7 @@ fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
 
     for (i, stage) in stages.iter().enumerate() {
         let command = stage[0].as_str();
-        let args: Vec<&str> = stage[1..].iter().map(|s| s.as_str()).collect();
+        let args: Vec<&str> = stage[1..].iter().map(String::as_str).collect();
 
         if i != last_index {
             let mut buffer: Vec<u8> = Vec::new();
@@ -199,12 +198,12 @@ fn run_pipeline(stages: &[Vec<String>], redirect: Option<&Redirect>) {
             }
             Some(Redirect::Overwrite(filename)) => match File::create(filename) {
                 Ok(mut file) => execute_command(command, &args, &piped_input, &mut file),
-                Err(e) => eprintln!("{}: {}", filename, e),
+                Err(e) => eprintln!("{filename}: {e}"),
             },
             Some(Redirect::Append(filename)) => {
                 match OpenOptions::new().create(true).append(true).open(filename) {
                     Ok(mut file) => execute_command(command, &args, &piped_input, &mut file),
-                    Err(e) => eprintln!("{}: {}", filename, e),
+                    Err(e) => eprintln!("{filename}: {e}"),
                 }
             }
         }
@@ -230,7 +229,7 @@ fn main() {
 
         match parse_pipeline(&tokens) {
             Ok((stages, redirect)) => run_pipeline(&stages, redirect.as_ref()),
-            Err(e) => eprintln!("{}", e),
+            Err(e) => eprintln!("{e}"),
         }
     }
 }

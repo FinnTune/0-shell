@@ -39,23 +39,15 @@ pub fn list_directory_entry(
     let classification_char = if classify {
         get_file_classification_char(metadata)
     } else {
-        "".to_string()
+        String::new()
     };
 
     if long_format {
         format!(
-            "{} {:>3} {} {} {:>6} {} {}{}",
-            file_type_indicator,
-            num_links,
-            owner,
-            group,
-            size,
-            datetime_str,
-            name,
-            classification_char
+            "{file_type_indicator} {num_links:>3} {owner} {group} {size:>6} {datetime_str} {name}{classification_char}"
         )
     } else {
-        format!("{}{}", name, classification_char)
+        format!("{name}{classification_char}")
     }
 }
 
@@ -72,7 +64,7 @@ fn get_file_classification_char(metadata: &Metadata) -> String {
     } else if metadata.permissions().mode() & 0o111 != 0 {
         "*".to_string()
     } else {
-        "".to_string()
+        String::new()
     }
 }
 
@@ -94,7 +86,7 @@ pub fn list_directory(
     };
 
     let mut entries: Vec<_> = read_dir
-        .filter_map(|entry| entry.ok())
+        .filter_map(Result::ok)
         .filter(|entry| {
             all || !entry
                 .path()
@@ -109,21 +101,21 @@ pub fn list_directory(
     entries.sort_by_key(|entry| {
         let name = entry.file_name().to_string_lossy().to_string();
         match name.as_str() {
-            "." | ".." => String::from(""), // Keep these at the top
+            "." | ".." => String::new(), // Keep these at the top
             _ => name.strip_prefix('.').unwrap_or(&name).to_lowercase(), // Ignore leading dot for sorting
         }
     });
 
     if long_format && all {
         let total_blocks = calculate_total_blocks(dir, all);
-        let _ = writeln!(output, "total {}", total_blocks);
+        let _ = writeln!(output, "total {total_blocks}");
 
         // Manually print '.' and '..' with their metadata
         print_metadata(dir, true, classify, output); // Current directory '.'
         print_metadata(&dir.join(".."), true, classify, output); // Parent directory '..'
     } else if long_format && !all {
         let total_blocks = calculate_total_blocks(dir, all);
-        let _ = writeln!(output, "total {}", total_blocks);
+        let _ = writeln!(output, "total {total_blocks}");
     }
 
     if all && !long_format && !classify {
@@ -153,14 +145,14 @@ pub fn list_directory(
         if length == 0 {
             let _ = writeln!(output);
         } else if !long_format {
-            if entry.path() != entries[length - 1].path() {
-                let _ = write!(output, "{}  ", display_str);
-            } else {
-                let _ = write!(output, "{}  ", display_str);
+            if entry.path() == entries[length - 1].path() {
+                let _ = write!(output, "{display_str}  ");
                 let _ = writeln!(output);
+            } else {
+                let _ = write!(output, "{display_str}  ");
             }
         } else {
-            let _ = writeln!(output, "{}", display_str);
+            let _ = writeln!(output, "{display_str}");
         }
     }
 }
@@ -228,9 +220,9 @@ fn calculate_total_blocks(dir: &Path, all: bool) -> u64 {
 }
 
 fn calculate_dir_blocks(dir: &Path, ls_block_size: f64) -> f64 {
-    fs::metadata(dir)
-        .map(|metadata| metadata.blocks() as f64 * 512.0 / ls_block_size)
-        .unwrap_or(0.0)
+    fs::metadata(dir).map_or(0.0, |metadata| {
+        metadata.blocks() as f64 * 512.0 / ls_block_size
+    })
 }
 
 fn format_permissions(mode: mode_t) -> String {
@@ -366,7 +358,7 @@ mod tests {
         let metadata = fs::symlink_metadata(&path).unwrap();
         let entry = list_directory_entry(&path, &metadata, true, false);
         let expected_name = path.file_name().unwrap().to_string_lossy();
-        assert_eq!(entry, format!("{}*", expected_name));
+        assert_eq!(entry, format!("{expected_name}*"));
         fs::remove_file(&path).unwrap();
     }
 
@@ -376,7 +368,7 @@ mod tests {
         fs::write(&path, b"hello").unwrap();
         let metadata = fs::symlink_metadata(&path).unwrap();
         let entry = list_directory_entry(&path, &metadata, false, true);
-        assert!(entry.starts_with("-rw"), "unexpected entry: {}", entry);
+        assert!(entry.starts_with("-rw"), "unexpected entry: {entry}");
         assert!(entry.contains(&format!("{:>6}", metadata.len())));
         assert!(entry.ends_with("entry_long_plain"));
         fs::remove_file(&path).unwrap();

@@ -10,10 +10,10 @@ pub fn get_user_name_by_uid(uid: u32) -> Option<String> {
     unsafe {
         if getpwuid_r(
             uid,
-            &mut pwd,
-            buf.as_mut_ptr() as *mut _,
+            &raw mut pwd,
+            buf.as_mut_ptr().cast(),
             buf.len(),
-            &mut result,
+            &raw mut result,
         ) == 0
             && !result.is_null()
         {
@@ -30,10 +30,10 @@ pub fn get_group_name_by_gid(gid: u32) -> Option<String> {
     unsafe {
         if getgrgid_r(
             gid,
-            &mut grp,
-            buf.as_mut_ptr() as *mut _,
+            &raw mut grp,
+            buf.as_mut_ptr().cast(),
             buf.len(),
-            &mut result,
+            &raw mut result,
         ) == 0
             && !result.is_null()
         {

@@ -5,7 +5,7 @@ pub fn parse_flags(args: &[&str]) -> Vec<String> {
         if arg.starts_with('-') && arg.len() > 2 {
             arg.chars()
                 .skip(1)
-                .for_each(|c| parsed_flags.push(format!("-{}", c)));
+                .for_each(|c| parsed_flags.push(format!("-{c}")));
         } else {
             parsed_flags.push(arg.to_string());
         }
@@ -74,7 +74,7 @@ pub fn parse_pipeline(tokens: &[String]) -> Result<(Vec<Vec<String>>, Option<Red
         }
     }
 
-    if stages.iter().any(|stage| stage.is_empty()) {
+    if stages.iter().any(Vec::is_empty) {
         return Err("syntax error: unexpected '|'".to_string());
     }
 
@@ -104,7 +104,7 @@ mod tests {
     use super::*;
 
     fn as_str_vec(v: &[String]) -> Vec<&str> {
-        v.iter().map(|s| s.as_str()).collect()
+        v.iter().map(String::as_str).collect()
     }
 
     #[test]
@@ -161,7 +161,7 @@ mod tests {
     }
 
     fn tokens(strs: &[&str]) -> Vec<String> {
-        strs.iter().map(|s| s.to_string()).collect()
+        strs.iter().map(ToString::to_string).collect()
     }
 
     #[test]
