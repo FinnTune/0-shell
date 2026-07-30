@@ -8,7 +8,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::exit;
 extern crate libc;
-use libc::{getgrgid_r, getpwuid_r, group, passwd};
+use libc::{getgrgid_r, getpwuid_r};
 use std::ffi::CStr;
 use std::mem;
 use std::ptr;
