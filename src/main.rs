@@ -51,7 +51,8 @@ fn main() {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        if io::stdin().read_line(&mut input).is_ok() {
+        let bytes_read = io::stdin().read_line(&mut input).unwrap_or(0);
+        if bytes_read > 0 {
             let tokens = tokenize(input.trim());
             let command = tokens.first().map(|s| s.as_str()).unwrap_or("");
             let args: Vec<&str> = tokens.iter().skip(1).map(|s| s.as_str()).collect();
