@@ -1,5 +1,5 @@
-use chrono::TimeZone;
 use chrono::Local;
+use chrono::TimeZone;
 use std::env;
 use std::fs;
 use std::fs::Metadata;
@@ -8,14 +8,13 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::exit;
 extern crate libc;
+use libc::mode_t;
 use libc::{getgrgid_r, getpwuid_r};
 use std::ffi::CStr;
 use std::mem;
-use std::ptr;
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::fs::PermissionsExt;
-use libc::mode_t;
-
+use std::ptr;
 
 // Function to get username by UID
 fn get_user_name_by_uid(uid: u32) -> Option<String> {
@@ -23,8 +22,15 @@ fn get_user_name_by_uid(uid: u32) -> Option<String> {
     let mut buf = vec![0u8; 1024];
     let mut result = ptr::null_mut();
     unsafe {
-        if getpwuid_r(uid, &mut pwd, buf.as_mut_ptr() as *mut _, buf.len(), &mut result) == 0
-            && !result.is_null() {
+        if getpwuid_r(
+            uid,
+            &mut pwd,
+            buf.as_mut_ptr() as *mut _,
+            buf.len(),
+            &mut result,
+        ) == 0
+            && !result.is_null()
+        {
             return Some(CStr::from_ptr(pwd.pw_name).to_string_lossy().into_owned());
         }
     }
@@ -37,8 +43,15 @@ fn get_group_name_by_gid(gid: u32) -> Option<String> {
     let mut buf = vec![0u8; 1024];
     let mut result = ptr::null_mut();
     unsafe {
-        if getgrgid_r(gid, &mut grp, buf.as_mut_ptr() as *mut _, buf.len(), &mut result) == 0
-            && !result.is_null() {
+        if getgrgid_r(
+            gid,
+            &mut grp,
+            buf.as_mut_ptr() as *mut _,
+            buf.len(),
+            &mut result,
+        ) == 0
+            && !result.is_null()
+        {
             return Some(CStr::from_ptr(grp.gr_name).to_string_lossy().into_owned());
         }
     }
@@ -120,7 +133,12 @@ fn main() {
                                 Ok(metadata) => {
                                     println!(
                                         "{}",
-                                        list_directory_entry(path, &metadata, classify, long_format)
+                                        list_directory_entry(
+                                            path,
+                                            &metadata,
+                                            classify,
+                                            long_format
+                                        )
                                     );
                                 }
                                 Err(e) => eprintln!("ls: cannot access '{}': {}", p, e),
@@ -289,7 +307,14 @@ fn list_directory_entry(
     if long_format {
         format!(
             "{} {:>3} {} {} {:>6} {} {}{}",
-            file_type_indicator, num_links, owner, group, size, datetime_str, name, classification_char
+            file_type_indicator,
+            num_links,
+            owner,
+            group,
+            size,
+            datetime_str,
+            name,
+            classification_char
         )
     } else {
         format!("{}{}", name, classification_char)
@@ -383,9 +408,7 @@ fn list_directory(dir: &Path, long_format: bool, all: bool, classify: bool) {
 
         if length == 0 {
             println!();
-        } else
-        if !long_format {
-
+        } else if !long_format {
             if entry.path() != entries[length - 1].path() {
                 print!("{}  ", display_str);
             } else {
@@ -534,7 +557,7 @@ fn format_permissions(mode: mode_t) -> String {
     let types = ["---", "--x", "-w-", "-wx", "r--", "r-x", "rw-", "rwx"];
     perms.push_str(types[((mode >> 6) & 7) as usize]); // Owner
     perms.push_str(types[((mode >> 3) & 7) as usize]); // Group
-    perms.push_str(types[(mode & 7) as usize]);        // Others
+    perms.push_str(types[(mode & 7) as usize]); // Others
 
     perms
 }
@@ -586,10 +609,7 @@ mod tests {
 
     #[test]
     fn tokenize_keeps_double_quoted_span_as_one_token() {
-        assert_eq!(
-            tokenize(r#"mkdir "my dir""#),
-            vec!["mkdir", "my dir"]
-        );
+        assert_eq!(tokenize(r#"mkdir "my dir""#), vec!["mkdir", "my dir"]);
     }
 
     #[test]
@@ -599,10 +619,7 @@ mod tests {
 
     #[test]
     fn tokenize_preserves_internal_whitespace_in_quotes() {
-        assert_eq!(
-            tokenize(r#"echo "a   b""#),
-            vec!["echo", "a   b"]
-        );
+        assert_eq!(tokenize(r#"echo "a   b""#), vec!["echo", "a   b"]);
     }
 
     #[test]
@@ -728,4 +745,3 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 }
-
