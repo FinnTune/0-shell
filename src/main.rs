@@ -1,4 +1,5 @@
 mod fileops;
+mod glob;
 mod ls;
 mod parser;
 mod users;
@@ -226,6 +227,7 @@ fn main() {
         if tokens.is_empty() {
             continue;
         }
+        let tokens = glob::expand_all(&tokens);
 
         match parse_pipeline(&tokens) {
             Ok((stages, redirect)) => run_pipeline(&stages, redirect.as_ref()),
